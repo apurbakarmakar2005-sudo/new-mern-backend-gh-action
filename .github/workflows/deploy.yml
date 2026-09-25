@@ -47,6 +47,9 @@ jobs:
 
     steps:
 
+      # ==============================
+      # CHECKOUT
+      # ==============================
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -61,6 +64,9 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
 
+      # ==============================
+      # VERIFY AWS
+      # ==============================
       - name: Verify AWS identity
         run: aws sts get-caller-identity
 
@@ -87,12 +93,13 @@ jobs:
             echo "========================================="
 
 
-            # Application directory
+            # =================================
+            # VARIABLES
+            # =================================
+
             APP_DIR="/var/www/backend"
-
-            # GitHub repository
+            TEMP_DIR="/tmp/backend-deploy"
             REPO_URL="https://github.com/${{ github.repository }}.git"
-
             BRANCH="main"
 
 
@@ -105,8 +112,9 @@ jobs:
             # CREATE APPLICATION DIRECTORY
             # =================================
 
-            sudo mkdir -p $APP_DIR
-            sudo chown -R ubuntu:ubuntu $APP_DIR
+            sudo mkdir -p "$APP_DIR"
+
+            sudo chown -R ubuntu:ubuntu "$APP_DIR"
 
 
             # =================================
@@ -115,18 +123,35 @@ jobs:
 
             if [ ! -d "$APP_DIR/.git" ]; then
 
-              echo "First deployment..."
+              echo "First deployment detected."
+
+              echo "Preparing temporary deployment directory..."
+
+              rm -rf "$TEMP_DIR"
+
+              mkdir -p "$TEMP_DIR"
+
+
               echo "Cloning repository..."
 
-              rm -rf $APP_DIR/*
-
               git clone \
-                --branch $BRANCH \
+                --branch "$BRANCH" \
                 --single-branch \
-                $REPO_URL \
-                $APP_DIR
+                "$REPO_URL" \
+                "$TEMP_DIR"
 
-              cd $APP_DIR
+
+              echo "Copying project files..."
+
+              cp -a "$TEMP_DIR"/. "$APP_DIR"/
+
+
+              echo "Removing temporary directory..."
+
+              rm -rf "$TEMP_DIR"
+
+
+              cd "$APP_DIR"
 
             else
 
@@ -135,79 +160,112 @@ jobs:
               # =================================
 
               echo "Existing repository found."
-              echo "Pulling latest changes..."
 
-              cd $APP_DIR
+              cd "$APP_DIR"
 
-              git fetch origin $BRANCH
 
-              git reset --hard origin/$BRANCH
+              echo "Fetching latest changes..."
 
-              # Remove old untracked files
-              # but KEEP .env
+              git fetch origin "$BRANCH"
+
+
+              echo "Resetting to latest GitHub version..."
+
+              git reset --hard "origin/$BRANCH"
+
+
+              echo "Removing old untracked files..."
+
               git clean -fd -e .env
+
 
             fi
 
 
             # =================================
-            # CHECK PROJECT
+            # CHECK PROJECT FILES
             # =================================
 
-            echo "Checking project files..."
+            echo "========================================="
+            echo "PROJECT FILES"
+            echo "========================================="
 
             ls -la
 
 
             # =================================
-            # INSTALL DEPENDENCIES
-            # =================================
-
-            echo "Installing dependencies..."
-
-            npm ci --omit=dev
-
-
-            # =================================
-            # CHECK .env
+            # CHECK .ENV
             # =================================
 
             if [ ! -f "$APP_DIR/.env" ]; then
 
               echo "ERROR: .env file not found!"
 
-              echo "Create /var/www/backend/.env on the EC2 server."
+              echo "Create /var/www/backend/.env on EC2."
 
               exit 1
 
             fi
+
+            echo ".env file found."
+
+
+            # =================================
+            # INSTALL DEPENDENCIES
+            # =================================
+
+            echo "========================================="
+            echo "INSTALLING DEPENDENCIES"
+            echo "========================================="
+
+            npm ci --omit=dev
 
 
             # =================================
             # PM2
             # =================================
 
-            echo "Starting application with PM2..."
+            echo "========================================="
+            echo "STARTING APPLICATION"
+            echo "========================================="
 
 
             if pm2 describe backend-api > /dev/null 2>&1; then
 
               echo "Application already running."
 
-              pm2 reload ecosystem.config.js --env production
+              echo "Restarting application..."
+
+              pm2 restart backend-api
 
             else
 
               echo "Starting application for the first time."
 
-              pm2 start ecosystem.config.js --env production
+              pm2 start src/server.js \
+                --name backend-api
 
             fi
 
 
-            # Save PM2 process list
+            # =================================
+            # SAVE PM2
+            # =================================
+
+            echo "Saving PM2 process list..."
 
             pm2 save
+
+
+            # =================================
+            # PM2 STATUS
+            # =================================
+
+            echo "========================================="
+            echo "PM2 STATUS"
+            echo "========================================="
+
+            pm2 status
 
 
             # =================================
@@ -223,19 +281,23 @@ jobs:
             # HEALTH CHECK
             # =================================
 
-            echo "Running health check..."
+            echo "========================================="
+            echo "HEALTH CHECK"
+            echo "========================================="
 
             HTTP_STATUS=$(curl \
               -s \
               -o /dev/null \
               -w "%{http_code}" \
-              http://localhost:5000/api/health || echo "000")
+              http://localhost:5000/api/health || true)
+
+
+            echo "HTTP Status: $HTTP_STATUS"
 
 
             if [ "$HTTP_STATUS" = "200" ]; then
 
               echo "SUCCESS: Health check passed."
-              echo "HTTP Status: $HTTP_STATUS"
 
             else
 
@@ -253,6 +315,10 @@ jobs:
 
             fi
 
+
+            # =================================
+            # DEPLOYMENT FINISHED
+            # =================================
 
             echo "========================================="
             echo "DEPLOYMENT FINISHED"
