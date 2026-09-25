@@ -102,7 +102,6 @@ jobs:
             REPO_URL="https://github.com/${{ github.repository }}.git"
             BRANCH="main"
 
-
             echo "Repository: $REPO_URL"
             echo "Branch: $BRANCH"
             echo "Application directory: $APP_DIR"
@@ -113,7 +112,6 @@ jobs:
             # =================================
 
             sudo mkdir -p "$APP_DIR"
-
             sudo chown -R ubuntu:ubuntu "$APP_DIR"
 
 
@@ -125,12 +123,9 @@ jobs:
 
               echo "First deployment detected."
 
-              echo "Preparing temporary deployment directory..."
-
               rm -rf "$TEMP_DIR"
 
               mkdir -p "$TEMP_DIR"
-
 
               echo "Cloning repository..."
 
@@ -140,16 +135,13 @@ jobs:
                 "$REPO_URL" \
                 "$TEMP_DIR"
 
-
               echo "Copying project files..."
 
               cp -a "$TEMP_DIR"/. "$APP_DIR"/
 
-
               echo "Removing temporary directory..."
 
               rm -rf "$TEMP_DIR"
-
 
               cd "$APP_DIR"
 
@@ -163,21 +155,17 @@ jobs:
 
               cd "$APP_DIR"
 
-
               echo "Fetching latest changes..."
 
               git fetch origin "$BRANCH"
-
 
               echo "Resetting to latest GitHub version..."
 
               git reset --hard "origin/$BRANCH"
 
-
               echo "Removing old untracked files..."
 
               git clean -fd -e .env
-
 
             fi
 
@@ -229,7 +217,6 @@ jobs:
             echo "STARTING APPLICATION"
             echo "========================================="
 
-
             if pm2 describe backend-api > /dev/null 2>&1; then
 
               echo "Application already running."
@@ -242,8 +229,7 @@ jobs:
 
               echo "Starting application for the first time."
 
-              pm2 start src/server.js \
-                --name backend-api
+              pm2 start src/server.js --name backend-api
 
             fi
 
@@ -291,7 +277,6 @@ jobs:
               -w "%{http_code}" \
               http://localhost:5000/api/health || true)
 
-
             echo "HTTP Status: $HTTP_STATUS"
 
 
@@ -309,9 +294,7 @@ jobs:
 
               echo "Checking PM2 logs..."
 
-              pm2 logs backend-api \
-                --lines 20 \
-                --nostream
+              pm2 logs backend-api --lines 20 --nostream
 
             fi
 
