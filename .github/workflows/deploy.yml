@@ -1,0 +1,260 @@
+name: Deploy Backend to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+
+  # ==============================
+  # TEST JOB
+  # ==============================
+  test:
+    name: Test MERN Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check syntax
+        run: node --check src/server.js
+
+
+  # ==============================
+  # DEPLOY JOB
+  # ==============================
+  deploy:
+    name: Deploy Backend to EC2
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+
+      # ==============================
+      # AWS OIDC
+      # ==============================
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+
+      # ==============================
+      # DEPLOY TO EC2
+      # ==============================
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          command_timeout: 10m
+
+          script: |
+
+            set -e
+
+            echo "========================================="
+            echo "DEPLOYMENT STARTED"
+            echo "Time: $(date)"
+            echo "========================================="
+
+
+            # Application directory
+            APP_DIR="/var/www/backend"
+
+            # GitHub repository
+            REPO_URL="https://github.com/${{ github.repository }}.git"
+
+            BRANCH="main"
+
+
+            echo "Repository: $REPO_URL"
+            echo "Branch: $BRANCH"
+            echo "Application directory: $APP_DIR"
+
+
+            # =================================
+            # CREATE APPLICATION DIRECTORY
+            # =================================
+
+            sudo mkdir -p $APP_DIR
+            sudo chown -R ubuntu:ubuntu $APP_DIR
+
+
+            # =================================
+            # FIRST DEPLOYMENT
+            # =================================
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+
+              echo "First deployment..."
+              echo "Cloning repository..."
+
+              rm -rf $APP_DIR/*
+
+              git clone \
+                --branch $BRANCH \
+                --single-branch \
+                $REPO_URL \
+                $APP_DIR
+
+              cd $APP_DIR
+
+            else
+
+              # =================================
+              # UPDATE EXISTING DEPLOYMENT
+              # =================================
+
+              echo "Existing repository found."
+              echo "Pulling latest changes..."
+
+              cd $APP_DIR
+
+              git fetch origin $BRANCH
+
+              git reset --hard origin/$BRANCH
+
+              # Remove old untracked files
+              # but KEEP .env
+              git clean -fd -e .env
+
+            fi
+
+
+            # =================================
+            # CHECK PROJECT
+            # =================================
+
+            echo "Checking project files..."
+
+            ls -la
+
+
+            # =================================
+            # INSTALL DEPENDENCIES
+            # =================================
+
+            echo "Installing dependencies..."
+
+            npm ci --omit=dev
+
+
+            # =================================
+            # CHECK .env
+            # =================================
+
+            if [ ! -f "$APP_DIR/.env" ]; then
+
+              echo "ERROR: .env file not found!"
+
+              echo "Create /var/www/backend/.env on the EC2 server."
+
+              exit 1
+
+            fi
+
+
+            # =================================
+            # PM2
+            # =================================
+
+            echo "Starting application with PM2..."
+
+
+            if pm2 describe backend-api > /dev/null 2>&1; then
+
+              echo "Application already running."
+
+              pm2 reload ecosystem.config.js --env production
+
+            else
+
+              echo "Starting application for the first time."
+
+              pm2 start ecosystem.config.js --env production
+
+            fi
+
+
+            # Save PM2 process list
+
+            pm2 save
+
+
+            # =================================
+            # WAIT FOR APPLICATION
+            # =================================
+
+            echo "Waiting for application..."
+
+            sleep 5
+
+
+            # =================================
+            # HEALTH CHECK
+            # =================================
+
+            echo "Running health check..."
+
+            HTTP_STATUS=$(curl \
+              -s \
+              -o /dev/null \
+              -w "%{http_code}" \
+              http://localhost:5000/api/health || echo "000")
+
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+
+              echo "SUCCESS: Health check passed."
+              echo "HTTP Status: $HTTP_STATUS"
+
+            else
+
+              echo "WARNING: Health check returned HTTP $HTTP_STATUS"
+
+              echo "Checking PM2 status..."
+
+              pm2 status
+
+              echo "Checking PM2 logs..."
+
+              pm2 logs backend-api \
+                --lines 20 \
+                --nostream
+
+            fi
+
+
+            echo "========================================="
+            echo "DEPLOYMENT FINISHED"
+            echo "Time: $(date)"
+            echo "========================================="
